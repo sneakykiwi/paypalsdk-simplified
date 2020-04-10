@@ -1,6 +1,7 @@
-from paypalrestsdk import BillingPlan, Payment, BillingAgreement
+from paypalrestsdk import BillingPlan, BillingAgreement
 import base64
 import requests
+from datetime import timedelta, datetime
 
 
 class PayPal:
@@ -11,12 +12,14 @@ class PayPal:
 
 
 class Subscription(PayPal):
-    def __init__(self, name: str = None, description: str = None, auto_bill_amount: str = 'yes', cancel_url: str = None,
-                 initial_fail_amount_action: str = 'continue', max_fail_attempts: str = '1', return_url: str = None,
-                 setup_fee: list = None, currency: str = None, cost: str = None, cycles: int = 0,
-                 frequency: str = 'MONTH',
-                 frequency_interval: str = '1', subscription_name: str = None, subscription_type: str = 'REGULAR',
+    def __init__(self, mode: str, client_id: str, client_secret: str, name: str = None, description: str = None,
+                 auto_bill_amount: str = 'yes', cancel_url: str = None, initial_fail_amount_action: str = 'continue',
+                 max_fail_attempts: str = '1', return_url: str = None, setup_fee: list = None, currency: str = None,
+                 cost: str = None, cycles: int = 0, frequency: str = 'MONTH', frequency_interval: str = '1',
+                 subscription_name: str = None, subscription_type: str = 'REGULAR',
                  billing_plan_type: str = 'INFINITE'):
+
+        super().__init__(mode, client_id, client_secret)
         self.name = name
         self.description = description
         self.auto_bill_amount = auto_bill_amount
@@ -78,7 +81,7 @@ class Subscription(PayPal):
         else:
             raise Exception(self.billing_plan.error)
 
-    def _get_paypal_access_token(self):
+    def __get_paypal_access_token(self):
         if self.mode == 'live':
             url = "https://api.paypal.com/v1/oauth2/token"
         else:
@@ -96,10 +99,30 @@ class Subscription(PayPal):
             raise Exception(
                 f'An error has occured whilst getting the PayPal access token. Common problems with this are a mismatch of the client id and client secret. Error: {str(e)}')
 
+    def __billing_agreement(self, description: str = f'Subscription agreement.'):
+        billing_agreement = BillingAgreement({
+            "name": self.name,
+            "description": description,
+            'start_type': (datetime.now() + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            "plan":{
+                'id': self.billing_plan_id
+            },
+            'payer':{
+                'payment_method': 'paypal'
+            }
+        })
+        if billing_agreement.create():
+            for link in billing_agreement.links:
+                if link.rel == 'approval_url':
+                    approval_url = link.href
+                    return approval_url
+        else:
+            raise Exception(billing_agreement.error)
+
     def cancel(self, reason: str = 'User cancellation.'):
         if not self.billing_plan_id:
             raise ValueError('Plan ID not found. Please create your subscription before trying to cancel it first!')
-        headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {self._get_paypal_access_token()}'}
+        headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {self.__get_paypal_access_token()}'}
         data = {'reason': reason}
         if self.mode == 'live':
             url = f'https://api.paypal.com/v1/billing/{self.billing_plan_id}/cancel'
@@ -111,5 +134,10 @@ class Subscription(PayPal):
         else:
             raise Exception(f'There has been an issue with your request, here is the reply from PayPal: {response.text}')
 
-
+    @classmethod
+    def pay(cls, payment_token: str = None):
+        if not payment_token:
+            raise ValueError('Please provide a valid payment token in order to activate the subscriptions for the requested user.')
+        billing_agreement_response = BillingAgreement.execute(payment_token)
+        return 'Payment activated.'
 
